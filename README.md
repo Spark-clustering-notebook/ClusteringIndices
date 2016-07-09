@@ -1,4 +1,4 @@
-# ClusteringIndices
+# Clustering Indices
 
 This work was done during an internship (2016) at Computer Science Laboratory (Laboratoire d'Informatique de Paris Nord, LIPN)
 at the University of Paris 13, with 
