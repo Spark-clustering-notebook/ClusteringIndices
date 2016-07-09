@@ -1,0 +1,542 @@
+{
+  "metadata" : {
+    "name" : "Clustering External Indices with smile and spark",
+    "user_save_timestamp" : "1970-01-01T01:00:00.000Z",
+    "auto_save_timestamp" : "1970-01-01T01:00:00.000Z",
+    "language_info" : {
+      "name" : "scala",
+      "file_extension" : "scala",
+      "codemirror_mode" : "text/x-scala"
+    },
+    "trusted" : true,
+    "customLocalRepo" : "/tmp/repo",
+    "customRepos" : [ "spartakus % default % http://dl.bintray.com/spark-clustering-notebook/maven % maven" ],
+    "customDeps" : [ "com.github.haifengl % smile-scala_2.11 % 1.1.0" ],
+    "customImports" : null,
+    "customArgs" : null,
+    "customSparkConf" : null
+  },
+  "cells" : [ {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "#External Indices\n###Example using SMILE and SPARK"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "This work was done during an internship (2016) at Computer Science Laboratory (Laboratoire d'Informatique de Paris Nord, LIPN) at the University of Paris 13, with CAO Anh Quan supervized by  LEBBAH Mustapha (LIPN, Paris 13 university), AZZAG Hanene (LIPN, Paris 13 university), DOAN Nhat Quang (USTH, Vietnam). \n\nThe purpose of this program is to calculate the External Indices using SPARK which is used to measure how good is the clustering algorithm using labels. In this work, we implement  popular external indices. This work is based on the Cluster Crit package in R\n\nThe clustering algorithms are based on SMILE [Smile (Statistical Machine Intelligence and Learning Engine)](https://github.com/haifengl/smile). Smile is a fast and comprehensive machine learning system. \n\nGet Smile from the [GitHub project releases page](https://github.com/haifengl/smile/releases). Downloads are pre-packaged for Mac and universal tarball."
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "import smile._\nimport smile.io._\nimport smile.util._\nimport smile.math._, Math._\nimport smile.math.distance._\nimport smile.math.kernel._\nimport smile.math.matrix._\nimport smile.stat.distribution._\nimport smile.data._\nimport smile.interpolation._\nimport smile.validation._\nimport smile.association._\nimport smile.regression._\nimport smile.classification._\nimport smile.feature._\nimport smile.clustering._\nimport smile.vq._\nimport smile.manifold._\nimport smile.mds._\nimport smile.sequence._\nimport smile.projection._\nimport smile.nlp._\nimport smile.plot._\nimport java.awt.Color\nimport smile.wavelet._\n\n// import smile.shell._\n",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "import smile._\nimport smile.io._\nimport smile.util._\nimport smile.math._\nimport Math._\nimport smile.math.distance._\nimport smile.math.kernel._\nimport smile.math.matrix._\nimport smile.stat.distribution._\nimport smile.data._\nimport smile.interpolation._\nimport smile.validation._\nimport smile.association._\nimport smile.regression._\nimport smile.classification._\nimport smile.feature._\nimport smile.clustering._\nimport smile.vq._\nimport smile.manifold._\nimport smile.mds._\nimport smile.sequence._\nimport smile.projection._\nimport smile.nlp._\nimport smile.plot._\nimport java.awt.Color\nimport smile.wavelet._\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : ""
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 6
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "#External Indices : Spark"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "import org.apache.spark.rdd.RDD\n\n/*\n * rdd1: the real cluster label\n * rdd2: the predicted cluster label\n *\n */\nclass ExternalIndex(var rdd1:RDD[String],var rdd2:RDD[String]) extends Serializable  {\n  \n  val combinedRDD = rdd1.zip(rdd2)\n//   combinedRDD.cache\n  \n  // Cartesian the combinedRDD with itself so we can use the map function to process on the pair of points\n  val cart = combinedRDD.cartesian(combinedRDD)\n  \n  /*\n   * Take in 2 pair of cluster label and return the yy,ny,nn,yn\n   */\n  private def notation(point1:(String,String),point2:(String,String)) = {\n    if ( (point1._1 == point2._1)  && (point1._2 == point2._2)  ){\n      (\"yy\",1)\n    } else if ( (point1._1 == point2._1)  && (point1._2 != point2._2)  ){\n      (\"yn\",1)\n    } else if ( (point1._1 != point2._1)  && (point1._2 == point2._2)  ){\n      (\"ny\",1)\n    } else {\n      (\"nn\",1)\n    }\n  }\n  \n  /*\n   * Compute the confusion table\n   */\n  def confusionTable()= {\n    this.combinedRDD.map(line => ( line ,1) ).reduceByKey(_+_)\n  }\n  \n  def getNotations() = {\n    val resultNotation = this.cart.map(v => this.notation(v._1,v._2))\n    resultNotation.reduceByKey(_+_)\n  }\n  \n  def purity()= {\n    val table = this.confusionTable\n    val cols = table.map( v => (v._1._2,v))\n    val t = cols.map(v => (v._1,v._2._2))\n    \n    val sum = t.reduceByKey(_+_)\n    val max = t.reduceByKey( (a,b) => if (a>b){a}else{b} )\n    \n    sum.join(max).map(v => v._2).map(a => a._2.toDouble/a._1 ).reduce(_+_)/sum.count\n  }\n  \n  def nmi() = {\n    val num_rows = combinedRDD.count();\n    val t = this.confusionTable\n    \n    val cols = t.map(v => (v._1._2,v._2)).reduceByKey(_+_).collectAsMap\n    val rows = t.map(v => (v._1._1,v._2)).reduceByKey(_+_).collectAsMap\n    println(cols)\n    val rightDenum = t.map(v => (v._1._2,v._2)).reduceByKey(_+_).map(v => cols.get(v._1).get * scala.math.log10((v._2.toDouble)/num_rows)).reduce(_+_);\n    val leftDenum = t.map(v => (v._1._1,v._2)).reduceByKey(_+_).map(v => rows.get(v._1).get * scala.math.log10((v._2.toDouble)/num_rows) ).reduce(_+_)   \n\n    val numerator = -2 * t.map(v => scala.math.log10( ((v._2 * num_rows).toDouble / (rows.get(v._1._1).get * cols.get(v._1._2).get )) )*v._2).reduce(_+_)\n    \n    numerator/(leftDenum + rightDenum)\n  }\n  \n  def precision():Double = {\n    return this.yy.toDouble / (this.yy+this.ny)\n  }\n  def recall():Double = {\n    return (this.yy.toDouble / (this.yy+this.yn))\n  }\n  \n  \n  def yy() = {\n    val notations = this.getNotations\n    if (notations.lookup(\"yy\").length == 0){\n      0.0\n    } else {\n      ((notations.lookup(\"yy\")(0) - combinedRDD.count())/2).toDouble\n    }\n  }\n  \n  def yn() = {\n    val notations = this.getNotations\n    if (notations.lookup(\"yn\").length == 0){\n      0.0\n    } else {\n        ((notations.lookup(\"yn\")(0))/2).toDouble\n    }\n\n  }\n  \n  def ny() = {\n    val notations = this.getNotations\n    if (notations.lookup(\"ny\").length == 0){\n      0.0\n    } else {\n      ((notations.lookup(\"ny\")(0))/2).toDouble\n    }\n  }\n  \n  def nn() = {\n    val notations = this.getNotations\n     if (notations.lookup(\"nn\").length == 0){\n      0.0\n    } else {\n      ((notations.lookup(\"nn\")(0))/2).toDouble\n    }\n  }\n   def nt() = {\n    this.yy + this.yn + this.nn + this.ny\n  }\n  \n  def czekanowskiDice():Double = {\n    return ((2*(this.yy)) / (2* this.yy + this.yn + this.ny ))\n  }\n\n  def rand():Double = {\n    val notations = this.getNotations\n    return ( (this.yy + this.nn) / this.nt )\n  }\n  def rogersTanimoto(): Double = {\n    val denominator = this.yy + (2*(this.yn+this.ny))+this.nn\n    return ((this.yy + this.nn) / denominator)\n  }\n  def folkesMallows():Double = {\n    val denominator = (this.yy+ this.yn)*(this.ny+this.yy)\n    return (this.yy / scala.math.sqrt(denominator))\n  }\n//   def hubert():Double = {\n//     val yy_yn = this.yy + this.yn\n//     val yy_ny = this.yy + this.ny\n//     val nn_yn = this.nn + this.yn\n//     val nn_ny = this.nn + this.ny\n//     val denominator = math.sqrt(yy_yn) * math.sqrt(yy_ny) * math.sqrt(nn_yn) * math.sqrt(nn_ny)\n//     ((this.nt*this.yy) - (yy_yn*yy_ny))/denominator\n//   }\n  def jaccard():Double = {\n    this.yy/(this.yy + this.yn + this.ny)\n  }\n  def kulczynski():Double = {\n    ((this.yy / (this.yy + this.ny)) + (this.yy / (this.yy+this.yn)))/2\n  }\n  def mcNemar():Double = {\n    (((this.nn - this.ny) )/ scala.math.sqrt(this.nn + this.ny))\n  }\n//   def phi():Double = {\n//     val num = (this.yy*this.nn)-(this.yn*this.ny)\n//     val denum = (this.yy + this.yn)*(this.yy + this.ny)*(this.yn + this.nn)*(this.ny + this.nn)\n//     num/denum\n//   }\n  def russelRao():Double = {\n    this.yy / this.nt\n  }\n  def sokalSneath1():Double = {\n    val denum = this.yy + (2*(this.yn + this.ny))\n    this.yy / denum\n  }\n  def sokalSneath2():Double = {\n    val denum = this.yy + this.nn + ((yn + ny)/2)\n    (this.yy + this.nn)/ denum\n  }\n}\n",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "import org.apache.spark.rdd.RDD\ndefined class ExternalIndex\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : ""
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 9
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "#Hierarchical Clustering : Smile"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val x = readCsv(\"/Users/lebbah/bin/smile-1.1.0/data/DS2.csv\").unzip\nval clusters = hclust(pdist(x), \"complete\")\nval y_hier = clusters.partition(13)\nplot(x, y_hier, '.', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "java.io.FileNotFoundException: /Users/lebbah/bin/smile-1.1.0/data/DS2.csv (No such file or directory)\n  at java.io.FileInputStream.open0(Native Method)\n  at java.io.FileInputStream.open(FileInputStream.java:195)\n  at java.io.FileInputStream.<init>(FileInputStream.java:138)\n  at smile.data.parser.DelimitedTextParser.parse(DelimitedTextParser.java:220)\n  at smile.data.parser.DelimitedTextParser.parse(DelimitedTextParser.java:200)\n  at smile.io.Operators$class.readTable(Operators.scala:139)\n  at smile.io.package$.readTable(package.scala:23)\n  at smile.io.Operators$class.readCsv(Operators.scala:144)\n  at smile.io.package$.readCsv(package.scala:23)\n  ... 33 elided\n"
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/hier.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "#K-Means : Smile"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val clusters = kmeans(x, 13, runs = 20)\nval y_kmean = clusters.getClusterLabel\nplot(x, y_kmean, '.', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "clusters: smile.clustering.KMeans =\nK-Means distortion: 6524980.68943\nClusters of 5458 data points of dimension 2:\n  0\t  450 ( 8.2%)\n  1\t  357 ( 6.5%)\n  2\t  381 ( 7.0%)\n  3\t  352 ( 6.4%)\n  4\t  460 ( 8.4%)\n  5\t  286 ( 5.2%)\n  6\t  303 ( 5.6%)\n  7\t  613 (11.2%)\n  8\t  547 (10.0%)\n  9\t  562 (10.3%)\n 10\t  379 ( 6.9%)\n 11\t  446 ( 8.2%)\n 12\t  322 ( 5.9%)\n\ny_kmean: Array[Int] = Array(0, 4, 8, 9, 11, 8, 2, 9, 11, 1, 12, 4, 5, 2, 8, 11, 4, 3, 2, 0, 11, 0, 9, 2, 6, 7, 2, 4, 12, 11, 2, 8, 0, 9, 4, 8, 4, 5, 0, 9, 6, 9, 7, 11, 0, 5, 4, 4, 11, 5, 9, 10, 0, 9, 3, 1, 3, 11, 4, 4, 9, 7, 7, 12, 7, 4, 9, 2, 4, 5, 11, 9, 2, 6, 0, 0, 3, 10, 4, 12, 5, 3, 2, 1, 4, 11, 7, 8, 5, 9, 7, 10, 12, 6, 10, 8, 0, 12, 9, 3, 3, 2, 0, 4, 4, 8, 7, 2, 1, 5, 1, 9, 10, 10, 8, 1, 8, 0, 2, 2, 4, 4, 7, 10, 0, 3, 8, 3, 0, 8, 12, 2,..."
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame4,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 5,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 14
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/kmean1.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "#G-Means : Smile"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val clusters = gmeans(x,13)\nval y_gmean = clusters.getClusterLabel\nplot(x, y_gmean, '.', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "clusters: smile.clustering.GMeans =\nG-Means distortion: 7489294.82453\nClusters of 5458 data points of dimension 2:\n  0\t  276 ( 5.1%)\n  1\t  454 ( 8.3%)\n  2\t  322 ( 5.9%)\n  3\t  383 ( 7.0%)\n  4\t  177 ( 3.2%)\n  5\t  279 ( 5.1%)\n  6\t  242 ( 4.4%)\n  7\t  742 (13.6%)\n  8\t  346 ( 6.3%)\n  9\t  603 (11.0%)\n 10\t  460 ( 8.4%)\n 11\t  687 (12.6%)\n 12\t  487 ( 8.9%)\n\ny_gmean: Array[Int] = Array(7, 1, 11, 7, 8, 11, 10, 7, 8, 12, 5, 1, 0, 10, 11, 4, 1, 2, 10, 7, 8, 7, 7, 10, 12, 9, 10, 1, 5, 8, 10, 11, 7, 7, 1, 11, 1, 6, 11, 6, 12, 6, 9, 8, 7, 0, 1, 1, 1, 0, 6, 3, 7, 7, 0, 11, 0, 8, 1, 1, 6, 9, 9, 5, 9, 1, 7, 10, 8, 0, 8, 7, 10, 12, 7, 7, 2, 3, 1, 5, 0, 2, 10, 12, 1, 8, 9, 9, 0, 6, 9, 3, 5, 12, 3, 11, 11, 5, 7, 2, 0, 5, 7, 1, 1, 11, 9, 10, 12, 6, 12, 7, 3, 3, 11, 12, 11, 7, 10, 10, 3, 1, 9, 3, 7, 2, 11, 2, 7..."
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame5,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 6,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 15
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/gmean1.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "#External Indices : Spark"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "We will compute 12 internal indices:\n* Czekanowski Dice \n* Rand Index\n* Rogers Tanimoto \n* Folkes Mallows \n* Jaccard \n* Kulczynski\n* McNemar\n* Russel Rao\n* Sokal Sneath 1\n* Sokal Sneath 2\n* Recall\n* Precision"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val realLabels = sc.parallelize(readCsv(\"/data/labels.csv\").unzip.map(_(0).toInt.toString))",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "realLabels: org.apache.spark.rdd.RDD[String] = ParallelCollectionRDD[119] at parallelize at <console>:207\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : ""
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 16
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "##Hierarchical Clustering"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : true
+    },
+    "cell_type" : "code",
+    "source" : "val predict_hier = sc.parallelize(y_hier).map(_.toString)\nval id_hier = new ExternalIndex(realLabels,predict_hier)\nprintln(\"czekanowskiDice=\"+id_hier.czekanowskiDice)\nprintln(\"rand=\"+id_hier.rand)\nprintln(\"rogersTanimoto=\"+id_hier.rogersTanimoto)\nprintln(\"folkesMallows=\"+id_hier.folkesMallows)\nprintln(\"jaccard=\"+id_hier.jaccard)\nprintln(\"kulczynski=\"+id_hier.kulczynski)\nprintln(\"mcNemar=\"+id_hier.mcNemar)\nprintln(\"russelRao=\"+id_hier.russelRao)\nprintln(\"sokalSneath1=\"+id_hier.sokalSneath1)\nprintln(\"sokalSneath2=\"+id_hier.sokalSneath2)\nprintln(\"recall=\"+id_hier.recall)\nprintln(\"precision=\"+id_hier.precision)\n",
+    "outputs" : [ ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "##K-means"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : true
+    },
+    "cell_type" : "code",
+    "source" : "val predict_kmean = sc.parallelize(y_kmean).map(_.toString)\nval id_kmean = new ExternalIndex(realLabels,predict_kmean)\nprintln(\"czekanowskiDice=\"+id_kmean.czekanowskiDice)\nprintln(\"rand=\"+id_kmean.rand)\nprintln(\"rogersTanimoto=\"+id_kmean.rogersTanimoto)\nprintln(\"folkesMallows=\"+id_kmean.folkesMallows)\nprintln(\"jaccard=\"+id_kmean.jaccard)\nprintln(\"kulczynski=\"+id_kmean.kulczynski)\nprintln(\"mcNemar=\"+id_kmean.mcNemar)\nprintln(\"russelRao=\"+id_kmean.russelRao)\nprintln(\"sokalSneath1=\"+id_kmean.sokalSneath1)\nprintln(\"sokalSneath2=\"+id_kmean.sokalSneath2)\nprintln(\"recall=\"+id_kmean.recall)\nprintln(\"precision=\"+id_kmean.precision)",
+    "outputs" : [ ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "##G-means"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : true
+    },
+    "cell_type" : "code",
+    "source" : "val predict_gmean = sc.parallelize(y_gmean).map(_.toString)\nval id_gmean = new ExternalIndex(realLabels,predict_gmean)\nprintln(\"czekanowskiDice=\"+id_gmean.czekanowskiDice)\nprintln(\"rand=\"+id_gmean.rand)\nprintln(\"rogersTanimoto=\"+id_gmean.rogersTanimoto)\nprintln(\"folkesMallows=\"+id_gmean.folkesMallows)\nprintln(\"jaccard=\"+id_gmean.jaccard)\nprintln(\"kulczynski=\"+id_gmean.kulczynski)\nprintln(\"mcNemar=\"+id_gmean.mcNemar)\nprintln(\"russelRao=\"+id_gmean.russelRao)\nprintln(\"sokalSneath1=\"+id_gmean.sokalSneath1)\nprintln(\"sokalSneath2=\"+id_gmean.sokalSneath2)\nprintln(\"recall=\"+id_gmean.recall)\nprintln(\"precision=\"+id_gmean.precision)",
+    "outputs" : [ ]
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val indices = Array(id_hier,id_kmean,id_gmean)\nval czekanowskiDice = indices.map(_.czekanowskiDice()).zipWithIndex.map(x => Array(x._2+0.72,x._1))\nval rand = indices.map(_.rand()).zipWithIndex.map(x => Array(x._2+0.72,x._1))\nval rogersTanimoto = indices.map(_.rogersTanimoto()).zipWithIndex.map(x => Array(x._2+0.72,x._1))\nval folkesMallows = indices.map(_.folkesMallows()).zipWithIndex.map(x => Array(x._2+0.72,x._1))\nval jaccard = indices.map(_.jaccard()).zipWithIndex.map(x => Array(x._2+0.72,x._1))\nval kulczynski = indices.map(_.kulczynski()).zipWithIndex.map(x => Array(x._2+0.72,x._1))\nval mcNemar = indices.map(_.mcNemar()).zipWithIndex.map(x => Array(x._2+0.72,x._1))\nval russelRao = indices.map(_.russelRao()).zipWithIndex.map(x => Array(x._2+0.72,x._1))\nval sokalSneath1 = indices.map(_.sokalSneath1()).zipWithIndex.map(x => Array(x._2+0.72,x._1))\nval sokalSneath2 = indices.map(_.sokalSneath2()).zipWithIndex.map(x => Array(x._2+0.72,x._1))\nval recall = indices.map(_.recall()).zipWithIndex.map(x => Array(x._2+0.72,x._1))\nval precision = indices.map(_.precision()).zipWithIndex.map(x => Array(x._2+0.72,x._1))\n",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "indices: Array[ExternalIndex] = Array(ExternalIndex@7c65cee1, ExternalIndex@1b62b7ad, ExternalIndex@130f5d6d)\nczekanowskiDice: Array[Array[Double]] = Array(Array(0.72, 0.3749675958471351), Array(1.72, 0.43770910076750547), Array(2.7199999999999998, 0.496179725296113))\nrand: Array[Array[Double]] = Array(Array(0.72, 0.8528303462904255), Array(1.72, 0.8720090372426338), Array(2.7199999999999998, 0.8813644340076281))\nrogersTanimoto: Array[Array[Double]] = Array(Array(0.72, 0.7434212921625402), Array(1.72, 0.7730638507165107), Array(2.7199999999999998, 0.787892376035573))\nfolkesMallows: Array[Array[Double]] = Array(Array(0.72, 0.3867034566432036), Array(1.72, 0.45697890547427916), Array(2.7199999999999998, 0.5117003528947278))\njaccard: Array[Array[Double]] = Array(Array(0.72, 0.2307446884682..."
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : ""
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 20
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<table>\n  <tr style=\"color:white\">\n    <th></th>\n    <th>Hierarchical Clustering</th>\n    <th>K-means</th>\n    <th>G-means</th>\n  <tr>\n  <tr>\n    <td>Czekanowski Dice</td>\n    <td>0.3749675958471351</td>\n    <td>0.43770910076750547</td>\n    <td>0.496179725296113</td>\n  <tr>\n  <tr>\n    <td>Rand</td>\n    <td>0.8528303462904255</td>\n    <td>0.8720090372426338</td>\n    <td>0.8813644340076281</td>\n  <tr>\n  <tr>\n    <td>Rogers Tanimoto</td>\n    <td>0.7434212921625402</td>\n    <td>0.7730638507165107</td>\n    <td>0.787892376035573</td>\n  <tr>\n  <tr>\n    <td>Folkes Mallows</td>\n    <td>0.3867034566432036</td>\n    <td>0.45697890547427916</td>\n    <td>0.5117003528947278</td>\n  <tr>\n  <tr>\n    <td>Jaccard</td>\n    <td>0.23074468846829366</td>\n    <td>0.2801713182753215</td>\n    <td>0.3299461602177257</td>\n  <tr>\n  <tr>\n    <td>Kulczynski</td>\n    <td>0.39880663032217223</td>\n    <td>0.4770970484330702</td>\n    <td>0.5277064696594125</td>\n  <tr>\n  <tr>\n    <td>Mc Nemar</td>\n    <td>3190.862945221066</td>\n    <td>3303.7038279166877</td>\n    <td>3310.000908699689</td>\n  <tr>\n  <tr>\n    <td>Russel Rao</td>\n    <td>0.0441447922271548</td>\n    <td>0.04981657118349509</td>\n    <td>0.05841821528425071</td>\n  <tr>\n  <tr>\n    <td>Sokal Sneath 1</td>\n    <td>0.13041910173412447</td>\n    <td>0.16290652740734624</td>\n    <td>0.1975661816152831</td>\n  <tr>\n  <tr>\n    <td>Sokal Sneath 2</td>\n    <td>0.9205703565875718</td>\n    <td>0.93162908927732</td>\n    <td>0.9369417408727888</td>\n  <tr>\n  <tr>\n    <td>Recall</td>\n    <td>0.30130193808060035</td>\n    <td>0.34001359365067435</td>\n    <td>0.39872249015881106</td>\n  <tr>\n  <tr>\n    <td>Precision</td>\n    <td>0.49631132256374405</td>\n    <td>0.614180503215466</td>\n    <td>0.656690449160014</td>\n  <tr>\n\n</table>"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "##Draw\n###From Left to Right\n* Hierarchical Clustering\n* K-means\n* G-means"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "plot(czekanowskiDice, Array(0,0,0), 'Q', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "res121: smile.plot.Window = Window(javax.swing.JFrame[frame47,244,23,1000x877,invalid,layout=java.awt.BorderLayout,title=Smile Plot 48,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x978,invalid,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,0x0,invalid,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame47,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 48,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 65
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/1.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "plot(rand, Array(0,0,0), 'Q', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "res77: smile.plot.Window = Window(javax.swing.JFrame[frame28,244,23,1000x877,invalid,layout=java.awt.BorderLayout,title=Smile Plot 29,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,invalid,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777675,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,0x0,invalid,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame28,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 29,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 43
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/2.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "plot(rogersTanimoto, Array(0,0,0), 'Q', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "res81: smile.plot.Window = Window(javax.swing.JFrame[frame30,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 31,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=11,maximumSize=,minimumSize=,preferredSize=])\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame30,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 31,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 45
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/3.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "plot(folkesMallows, Array(0,0,0), 'Q', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "res87: smile.plot.Window = Window(javax.swing.JFrame[frame32,244,23,1000x877,invalid,layout=java.awt.BorderLayout,title=Smile Plot 33,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x978,invalid,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,0x0,invalid,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame32,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 33,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 48
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/4.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "plot(jaccard, Array(0,0,0), 'Q', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "res93: smile.plot.Window = Window(javax.swing.JFrame[frame34,244,23,1000x877,invalid,layout=java.awt.BorderLayout,title=Smile Plot 35,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,invalid,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,0x0,invalid,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame34,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 35,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 51
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/5.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "plot(kulczynski, Array(0,0,0), 'Q', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "res97: smile.plot.Window = Window(javax.swing.JFrame[frame36,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 37,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=8203,maximumSize=,minimumSize=,preferredSize=])\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame36,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 37,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 53
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/6.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "plot(mcNemar, Array(0,0,0), 'Q', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "res99: smile.plot.Window = Window(javax.swing.JFrame[frame37,244,23,1000x877,invalid,layout=java.awt.BorderLayout,title=Smile Plot 38,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,invalid,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,0x0,invalid,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame37,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 38,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 54
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/7.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "plot(russelRao, Array(0,0,0), 'Q', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "res101: smile.plot.Window = Window(javax.swing.JFrame[frame38,244,23,1000x877,invalid,layout=java.awt.BorderLayout,title=Smile Plot 39,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,invalid,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,0x0,invalid,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame38,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 39,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 55
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/8.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "plot(sokalSneath1, Array(0,0,0), 'Q', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "res103: smile.plot.Window = Window(javax.swing.JFrame[frame39,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 40,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame39,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 40,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 56
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/9.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "plot(sokalSneath2, Array(0,0,0), 'Q', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "res105: smile.plot.Window = Window(javax.swing.JFrame[frame40,244,23,1000x877,invalid,layout=java.awt.BorderLayout,title=Smile Plot 41,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,invalid,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777675,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,0x0,invalid,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame40,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 41,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 57
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/10.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "plot(recall, Array(0,0,0), 'Q', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "res107: smile.plot.Window = Window(javax.swing.JFrame[frame41,244,23,1000x877,invalid,layout=java.awt.BorderLayout,title=Smile Plot 42,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,invalid,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,0x0,invalid,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame41,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 42,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 58
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/11.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "plot(precision, Array(0,0,0), 'Q', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "res117: smile.plot.Window = Window(javax.swing.JFrame[frame45,244,23,1000x877,invalid,layout=java.awt.BorderLayout,title=Smile Plot 46,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x978,invalid,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,0x0,invalid,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame45,244,23,1000x877,layout=java.awt.BorderLayout,title=Smile Plot 46,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x855,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x855,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 63
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/12.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : true
+    },
+    "cell_type" : "code",
+    "source" : "",
+    "outputs" : [ ]
+  } ],
+  "nbformat" : 4
+}

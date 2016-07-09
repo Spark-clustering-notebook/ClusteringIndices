@@ -1,0 +1,434 @@
+{
+  "metadata" : {
+    "name" : "Clustering Internal Indices with smile and spark",
+    "user_save_timestamp" : "1970-01-01T01:00:00.000Z",
+    "auto_save_timestamp" : "1970-01-01T01:00:00.000Z",
+    "language_info" : {
+      "name" : "scala",
+      "file_extension" : "scala",
+      "codemirror_mode" : "text/x-scala"
+    },
+    "trusted" : true,
+    "customLocalRepo" : "/tmp/repo",
+    "customRepos" : [ "spartakus % default % http://dl.bintray.com/spark-clustering-notebook/maven % maven" ],
+    "customDeps" : [ "com.github.haifengl % smile-scala_2.11 % 1.1.0" ],
+    "customImports" : null,
+    "customArgs" : null,
+    "customSparkConf" : null
+  },
+  "cells" : [ {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "#Internal Indices  \n\n###Example using SMILE and SPARK"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "This work was done during an internship (2016) at Computer Science Laboratory (Laboratoire d'Informatique de Paris Nord, LIPN) at the University of Paris 13, with CAO Anh Quan supervized by  LEBBAH Mustapha (LIPN, Paris 13 university), AZZAG Hanene (LIPN, Paris 13 university), DOAN Nhat Quang (USTH, Vietnam). \n\nThe purpose of this program is to calculate the Internal Indices using SPARK which is used to measure how good is the clustering algorithm. In this work, we implement two popular internal indices which are Davies Bouldin Index and Silhouette Index. This work is based on the Cluster Crit package in R\n\nThe clustering algorithms are based on SMILE [Smile (Statistical Machine Intelligence and Learning Engine)](https://github.com/haifengl/smile). Smile is a fast and comprehensive machine learning system. \n\nGet Smile from the [GitHub project releases page](https://github.com/haifengl/smile/releases). Downloads are pre-packaged for Mac and universal tarball.\n"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "import smile._\nimport smile.io._\nimport smile.util._\nimport smile.math._, Math._\nimport smile.math.distance._\nimport smile.math.kernel._\nimport smile.math.matrix._\nimport smile.stat.distribution._\nimport smile.data._\nimport smile.interpolation._\nimport smile.validation._\nimport smile.association._\nimport smile.regression._\nimport smile.classification._\nimport smile.feature._\nimport smile.clustering._\nimport smile.vq._\nimport smile.manifold._\nimport smile.mds._\nimport smile.sequence._\nimport smile.projection._\nimport smile.nlp._\nimport smile.plot._\nimport java.awt.Color\nimport smile.wavelet._\n// import smile.shell._\n",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "import smile._\nimport smile.io._\nimport smile.util._\nimport smile.math._\nimport Math._\nimport smile.math.distance._\nimport smile.math.kernel._\nimport smile.math.matrix._\nimport smile.stat.distribution._\nimport smile.data._\nimport smile.interpolation._\nimport smile.validation._\nimport smile.association._\nimport smile.regression._\nimport smile.classification._\nimport smile.feature._\nimport smile.clustering._\nimport smile.vq._\nimport smile.manifold._\nimport smile.mds._\nimport smile.sequence._\nimport smile.projection._\nimport smile.nlp._\nimport smile.plot._\nimport java.awt.Color\nimport smile.wavelet._\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : ""
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 32
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "#Internal Indices : Spark"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "import org.apache.spark.rdd.RDD\n//import org.apache.spark.SparkContext\n\nclass InternalIndexHelper() extends Serializable{\n  /*\n   * Euclidean Distance\n   * Params:\n   *  point1,point2: Array[Double] - 2 vectors that need to compute the distance\n   * return: Double\n   */\n   def euclidean(point1:Array[Double],point2:Array[Double]) = {\n      val  sum = point1.zip(point2).map(v => scala.math.pow((v._1 - v._2),2)).reduce(_+_)\n      scala.math.sqrt(sum)\n    }\n  \n   /*\n   * Count the number of points in each cluster\n   * Params:\n   *  predict: RDD[String] - the RDD of all cluster labels\n   * return: RDD[(String,Int)] - RDD of tuples of label and the corresponding amount\n   */\n  def clustersSize(predict:RDD[String]) = {\n    predict.map(v => (v,1)).reduceByKey(_+_)\n  }\n  \n  /*\n   * Scatter of point in cluster\n   * Params:\n   *  cluster: RDD[String] - the RDD of cluster that we need to compute\n   * return: Double - Scatter value\n   */\n  def scatter(cluster:RDD[Array[Double]]) = {\n    val centroid = center(cluster)\n    val sumDistance = cluster.map(p => this.euclidean(centroid,p)).reduce(_+_)\n    sumDistance/cluster.count\n  }\n  \n  /*\n   * Centroid of cluster\n   * Params:\n   *  cluster: RDD[String] - the RDD of cluster that we need to compute\n   * return: Array[Double] - The Centroid vector \n   */\n  def center(cluster:RDD[Array[Double]]) = {\n    val dimen = cluster.take(1)(0).length\n    val index = (0 to dimen-1).toArray\n    val numPoints = cluster.count\n    index.map(i => (cluster.map(p => p(i).toDouble).reduce(_+_))/numPoints )\n  }\n  \n  /*\n   * Measure of how good the clustering scheme is\n   * Params:\n   *  scatter1,scatter2: Double - the scatter value of cluster 1 and cluster 2\n   *  center1,center2: Array[Double] - The centroid of cluster 1 and cluster 2\n   */\n  def good(scatter1:Double,scatter2:Double,center1:Array[Double],center2:Array[Double])={\n    val m = this.euclidean(center1,center2)\n    val num = scatter1 + scatter2\n    num/m\n  }\n  /*\n   * Compute the  within-cluster mean distance a(i) for all the point in cluster\n   * Param: cluster: RDD[Array[Double]]\n   * Return index of point and the corresponding a(i) Array[(Long, Double)]\n   */\n  def aiList(cluster:RDD[(Long, Array[Double])]) = {\n    //pair each point with the others in clusters\n    val pointPairs = cluster.cartesian(cluster).filter(v => v._1._1 != v._2._1 )\n    // Compute the distance between each pair\n    val allPointsDistances = pointPairs.map(v => ((v._1._1, v._2._1 ), euclidean(v._1._2,v._2._2)))\n    // Sum all the distances for each point\n    val totalDistanceList = allPointsDistances.map(v => (v._1._1,v._2)).reduceByKey(_+_)\n    // Count the point in cluster\n    val count = totalDistanceList.count\n    // Compute the a{i} list\n    val aiList = totalDistanceList.mapValues(_/(count-1))\n    aiList\n  }\n}\nclass InternalIndex(var point:RDD[Array[Double]],var predict:RDD[String],context:SparkContext){\n  if(predict.count != point.count){\n    throw new Exception(\"the length of predict and points must be the same\")\n  }\n  val clusterLabels = predict.distinct\n  \n  //zip the predict label with the point\n  val combinedRDD = predict.zip(point)\n  val sc = context\n  val internalHelper = new InternalIndexHelper()\n  \n  def scattersList() = {\n    val helper = internalHelper\n    val clusters = this.clusterLabels.collect.map(l => (l,this.combinedRDD.filter(v=> v._1 == l).map(_._2) ) ) \n    val scatters = this.sc.parallelize(clusters.map(x => (x._1,helper.scatter(x._2))))\n    scatters\n  }\n  \n  def centersList() = {\n    val helper = internalHelper\n    val clusters = this.clusterLabels.collect.map(l => (l,this.combinedRDD.filter(v=> v._1 == l).map(_._2) ) ) \n    var centers= this.sc.parallelize(clusters.map(x => (x._1,helper.center(x._2))))\n    centers\n  }\n  \n  \n  /*\n   * Davies Bouldin Index\n   */\n  def davies_bouldin() = {\n    val helper = internalHelper\n    var scatters = this.scattersList()\n    val centers = this.centersList()\n    val clustersWithCenterandScatters = scatters.join(centers)\n    val cart = clustersWithCenterandScatters.cartesian(clustersWithCenterandScatters).filter(v => v._1._1 != v._2._1)\n    val rijList = cart.map(v => ((v._1._1,v._2._1), helper.good(v._1._2._1,v._2._2._1,v._1._2._2,v._2._2._2)))\n    val di = rijList.map(v => (v._1._1,v._2)).reduceByKey((a,b)=> scala.math.max(a,b))\n    val numCluster = clusterLabels.count\n    val davies_bouldin = di.map(v => v._2).reduce(_+_) / numCluster\n    davies_bouldin\n  }\n  /*\n   * The mean of the silhouette widths for a given cluster\n   * Param: label: String - the cluster label that we want to compute\n   * Return Double\n   */\n  def sk(label:String) = {\n    val helper = internalHelper\n    // index all point\n    val indexedData = this.combinedRDD.zipWithIndex().map(v => (v._2,v._1))\n    // get the target cluster\n    val target = indexedData.filter(x => x._2._1==label )\n    // get others cluster\n    val others = indexedData.filter(x => x._2._1!=label )\n    // catersian the target with others\n    val cart = target.cartesian(others)\n    //get the sum distance between each point and other clusters\n    val allDistances = cart.map(x => ((x._1._1,x._2._2._1), helper.euclidean(x._1._2._2,x._2._2._2))).reduceByKey(_+_)\n    // numbers of point of others clusters\n    val numPoints = others.map(x => (x._2._1,1)).reduceByKey(_+_).collectAsMap \n    //mean distance of point to the points of the other clusters \n    val deltas = allDistances.map(x => (x._1._1,x._2/numPoints.get(x._1._2).getOrElse(1)))\n    // Compute b(i) the smallest of these mean distances\n    val bi = deltas.reduceByKey((a,b) => if (a>b) b else a)\n    val ai = helper.aiList(target.map(x => (x._1,x._2._2) ))\n    val si = ai.join(bi).map(x => (x._2._2 - x._2._1)/scala.math.max(x._2._2,x._2._1) )\n    val sk = si.reduce(_+_)/si.count\n    sk\n  }\n  \n  /*\n   * Silhouette Index\n   */\n  def silhouette() = {\n    this.clusterLabels.collect.map(sk).reduce(_+_)/this.clusterLabels.count\n  }\n}",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "import org.apache.spark.rdd.RDD\ndefined class InternalIndexHelper\ndefined class InternalIndex\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : ""
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 36
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "#Hierarchical Clustering : Smile"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val x = readTable(\"/Users/lebbah/bin/smile-1.1.0/data/clustering/gaussian/six.txt\").unzip\nval clusters = hclust(pdist(x), \"complete\")\nval y_hier = clusters.partition(6)\nplot(x, y_hier, '.', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "x: Array[Array[Double]] = Array(Array(0.216754862863576, -2.83958305795995), Array(-0.542492572263425, 1.51146905596993), Array(0.891144645072327, 1.44235456512301), Array(0.595980577187474, 0.505369283646191), Array(1.63561800111297, -0.757293249410894), Array(0.689275441919723, 0.249238084707463), Array(-1.28124663010116, -0.316852595609554), Array(-0.213144519278363, 0.102921344748016), Array(1.89653987190927, -0.211608601246304), Array(1.77686321368272, 0.270543080449676), Array(0.566604498180317, -0.3070002549446), Array(0.01571945400457, 0.889868717770363), Array(0.383057338517151, 0.388043478406846), Array(-0.0451371159133086, -2.27438816241481), Array(0.0343519073969926, -0.549951687927403), Array(0.169026774218306, 0.33038001858613), Array(1.16502683902767, -0.598144633673371),..."
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame11,220,23,1000x843,layout=java.awt.BorderLayout,title=Smile Plot 12,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x821,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x821,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 35
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/img1.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "#K-Means : Smile"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val clusters = kmeans(x, 6, runs = 20)\nval y_kmean = clusters.getClusterLabel\nplot(x, y_kmean, '.', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "clusters: smile.clustering.KMeans =\nK-Means distortion: 3247,64055\nClusters of 1800 data points of dimension 2:\n  0\t  302 (16.8%)\n  1\t  302 (16.8%)\n  2\t  302 (16.8%)\n  3\t  296 (16.4%)\n  4\t  302 (16.8%)\n  5\t  296 (16.4%)\n\ny_kmean: Array[Int] = Array(4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 0, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 0, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,..."
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame1,220,23,1000x843,layout=java.awt.BorderLayout,title=Smile Plot 2,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x821,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x821,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 6
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/kmean.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "#X-Means : Smile"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val clusters = xmeans(x)\nval y_xmean = clusters.getClusterLabel\nplot(x, y_xmean, '.', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "clusters: smile.clustering.XMeans =\nX-Means distortion: 3247,64055\nClusters of 1800 data points of dimension 2:\n  0\t  296 (16.4%)\n  1\t  302 (16.8%)\n  2\t  302 (16.8%)\n  3\t  302 (16.8%)\n  4\t  296 (16.4%)\n  5\t  302 (16.8%)\n\ny_xmean: Array[Int] = Array(5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 3, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 3, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,..."
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame2,220,23,1000x843,layout=java.awt.BorderLayout,title=Smile Plot 3,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x821,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x821,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 7
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/xmean.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "#G-Means : Smile"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val clusters = gmeans(x)\nval y_gmean = clusters.getClusterLabel\nplot(x, y_gmean, '.', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "clusters: smile.clustering.GMeans =\nG-Means distortion: 2800,22959\nClusters of 1800 data points of dimension 2:\n  0\t  290 (16.1%)\n  1\t  295 (16.4%)\n  2\t  280 (15.6%)\n  3\t  175 ( 9.7%)\n  4\t  279 (15.5%)\n  5\t  161 ( 8.9%)\n  6\t  173 ( 9.6%)\n  7\t  147 ( 8.2%)\n\ny_gmean: Array[Int] = Array(2, 2, 2, 2, 3, 2, 2, 2, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 6, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 6, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3,..."
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame3,220,23,1000x843,invalid,layout=java.awt.BorderLayout,title=Smile Plot 4,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x821,invalid,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,0x0,invalid,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 8
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/gmean.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "#Internal Indices : Spark"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "We will compute 2 internal indices:\n* Davies Bouldin Index\n* Silhouette Index"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val points = sc.parallelize(x)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "points: org.apache.spark.rdd.RDD[Array[Double]] = ParallelCollectionRDD[0] at parallelize at <console>:124\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "ParallelCollectionRDD[0] at parallelize at &lt;console&gt;:124"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 9
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "##Hierarchical Clustering"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val predict_hier = sc.parallelize(y_hier).map(_.toString)\nval id_hier = new InternalIndex(points,predict_hier,sc)\nprintln(\"Davies Bouldin Index \" + id_hier.davies_bouldin())\nprintln(\"Silhouette Index \" + id_hier.silhouette())",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "Davies Bouldin Index 0.7718067900206663\nSilhouette Index 0.4080508836146181\npredict_hier: org.apache.spark.rdd.RDD[String] = MapPartitionsRDD[2] at map at <console>:129\nid_hier: InternalIndex = $$$82b5b23cea489b2712a1db46c77e458$$$$w$InternalIndex@65966b55\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "<span style=\"color:red;\">Ooops, exception in the cell: $line31.$rendered$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$.rendered()</span>"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 10
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "##K-means"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val predict_kmean = sc.parallelize(y_kmean).map(_.toString)\nval id_kmean = new InternalIndex(points,predict_kmean,sc)\nprintln(\"Davies Bouldin Index \" + id_kmean.davies_bouldin())\nprintln(\"Silhouette Index \" + id_kmean.silhouette())",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "Davies Bouldin Index 0.6064459782359822\nSilhouette Index 0.522118454636385\npredict_kmean: org.apache.spark.rdd.RDD[String] = MapPartitionsRDD[205] at map at <console>:129\nid_kmean: InternalIndex = $$$82b5b23cea489b2712a1db46c77e458$$$$w$InternalIndex@3d74a22d\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "<span style=\"color:red;\">Ooops, exception in the cell: $line32.$rendered$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$.rendered()</span>"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 11
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "##X-means"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val predict_xmean = sc.parallelize(y_xmean).map(_.toString)\nval id_xmean = new InternalIndex(points,predict_xmean,sc)\nprintln(\"Davies Bouldin Index \" + id_xmean.davies_bouldin())\nprintln(\"Silhouette Index \" + id_xmean.silhouette())",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "Davies Bouldin Index 0.6064459782359822\nSilhouette Index 0.522118454636385\npredict_xmean: org.apache.spark.rdd.RDD[String] = MapPartitionsRDD[408] at map at <console>:129\nid_xmean: InternalIndex = $$$82b5b23cea489b2712a1db46c77e458$$$$w$InternalIndex@1e8fc17c\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "<span style=\"color:red;\">Ooops, exception in the cell: $line33.$rendered$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$.rendered()</span>"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 12
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "##G-means"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val predict_gmean = sc.parallelize(y_gmean).map(_.toString)\nval id_gmean = new InternalIndex(points,predict_gmean,sc)\nprintln(\"Davies Bouldin Index \" + id_gmean.davies_bouldin())\nprintln(\"Silhouette Index \" + id_gmean.silhouette())",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "Davies Bouldin Index 0.8880694241583577\nSilhouette Index 0.3996531911684756\npredict_gmean: org.apache.spark.rdd.RDD[String] = MapPartitionsRDD[611] at map at <console>:129\nid_gmean: InternalIndex = $$$82b5b23cea489b2712a1db46c77e458$$$$w$InternalIndex@7301ea61\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "<span style=\"color:red;\">Ooops, exception in the cell: $line34.$rendered$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$.rendered()</span>"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 13
+    } ]
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val indices = Array(id_hier,id_kmean,id_xmean,id_gmean)\nval daviesBouldinIndices = indices.map(_.davies_bouldin()).zipWithIndex.map(x => Array(x._2+0.72,x._1))\nval silhouetteIndices = indices.map(_.silhouette()).zipWithIndex.map(x => Array(x._2+0.72,x._1))\n",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "indices: Array[InternalIndex] = Array($$$82b5b23cea489b2712a1db46c77e458$$$$w$InternalIndex@65966b55, $$$82b5b23cea489b2712a1db46c77e458$$$$w$InternalIndex@3d74a22d, $$$82b5b23cea489b2712a1db46c77e458$$$$w$InternalIndex@1e8fc17c, $$$82b5b23cea489b2712a1db46c77e458$$$$w$InternalIndex@7301ea61)\ndaviesBouldinIndices: Array[Array[Double]] = Array(Array(0.72, 0.7718067900206663), Array(1.72, 0.6064459782359822), Array(2.7199999999999998, 0.6064459782359822), Array(3.7199999999999998, 0.8880694241583577))\nsilhouetteIndices: Array[Array[Double]] = Array(Array(0.72, 0.408050883614618), Array(1.72, 0.522118454636385), Array(2.7199999999999998, 0.522118454636385), Array(3.7199999999999998, 0.3996531911684756))\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "<span style=\"color:red;\">Ooops, exception in the cell: $line35.$rendered$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$$iw$.rendered()</span>"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 14
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<table>\n  <tr style=\"color:white\">\n    <th></th>\n    <th>Hierarchical Clustering</th>\n    <th>K-means</th>\n    <th>X-means</th>\n    <th>G-means</th>\n  <tr>\n  <tr>\n    <td>Davies Bouldin</td>\n    <td>0.7718067900206661</td>\n    <td>0.6064459782359822</td>\n    <td>0.7900762015964974</td>\n    <td>0.8880694241583577</td>\n  <tr>\n  <tr>\n    <td>Silhouette</td>\n    <td>0.40805088361461794</td>\n    <td>0.522118454636385</td>\n    <td>0.44722688941437616</td>\n    <td>0.39965319116847553</td>\n  <tr>\n\n</table>"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "##Draw : Smile\n###From Left to Right\n* Hierarchical Clustering\n* K-means\n* X-means\n* G-means"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "###Davies Bouldin"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "line(daviesBouldinIndices, color = Color.RED)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "res11: smile.plot.Window = Window(javax.swing.JFrame[frame4,220,23,1000x843,invalid,layout=java.awt.BorderLayout,title=Smile Plot 5,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x821,invalid,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,0x0,invalid,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame4,220,23,1000x843,layout=java.awt.BorderLayout,title=Smile Plot 5,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x821,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x821,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 15
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/silhouette.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "##Silouette"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "line(silhouetteIndices, color = Color.BLUE)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "res12: smile.plot.Window = Window(javax.swing.JFrame[frame5,220,23,1000x843,invalid,layout=java.awt.BorderLayout,title=Smile Plot 6,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x978,invalid,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777675,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,0x0,invalid,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])\n"
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame5,220,23,1000x843,layout=java.awt.BorderLayout,title=Smile Plot 6,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x821,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x821,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 16
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/silhouette.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "###Both indices"
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "* Silhouette: Blue\n* Davies Bouldin: Red"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : false
+    },
+    "cell_type" : "code",
+    "source" : "val data = daviesBouldinIndices.union(silhouetteIndices)\nval labels = Array(0,0,0,0,1,1,1,1)\nplot(data, labels, 'Q', Palette.COLORS)",
+    "outputs" : [ {
+      "name" : "stdout",
+      "output_type" : "stream",
+      "text" : "data: Array[Array[Double]] = Array(Array(0.72, 0.7718067900206663), Array(1.72, 0.6064459782359822), Array(2.7199999999999998, 0.6064459782359822), Array(3.7199999999999998, 0.8880694241583577), Array(0.72, 0.408050883614618), Array(1.72, 0.522118454636385), Array(2.7199999999999998, 0.522118454636385), Array(3.7199999999999998, 0.3996531911684756))\nlabels: Array[Int] = Array(0, 0, 0, 0, 1, 1, 1, 1)\nres13: smile.plot.Window = Window(javax.swing.JFrame[frame6,220,23,1000x843,invalid,layout=java.awt.BorderLayout,title=Smile Plot 7,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x821,invalid,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingE..."
+    }, {
+      "metadata" : { },
+      "data" : {
+        "text/html" : "Window(javax.swing.JFrame[frame6,220,23,1000x843,layout=java.awt.BorderLayout,title=Smile Plot 7,resizable,normal,defaultCloseOperation=DISPOSE_ON_CLOSE,rootPane=javax.swing.JRootPane[,0,22,1000x821,layout=javax.swing.JRootPane$RootLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=16777673,maximumSize=,minimumSize=,preferredSize=],rootPaneCheckingEnabled=true],smile.plot.PlotCanvas[,0,0,1000x821,layout=java.awt.BorderLayout,alignmentX=0.0,alignmentY=0.0,border=,flags=9,maximumSize=,minimumSize=,preferredSize=])"
+      },
+      "output_type" : "execute_result",
+      "execution_count" : 17
+    } ]
+  }, {
+    "metadata" : { },
+    "cell_type" : "markdown",
+    "source" : "<img src=\"https://s3-ap-southeast-1.amazonaws.com/cmstorage/test/both.png\" style=\"width:80%;height:auto\"/>"
+  }, {
+    "metadata" : {
+      "trusted" : true,
+      "input_collapsed" : false,
+      "collapsed" : true
+    },
+    "cell_type" : "code",
+    "source" : "",
+    "outputs" : [ ]
+  } ],
+  "nbformat" : 4
+}
