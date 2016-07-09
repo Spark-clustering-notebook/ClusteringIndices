@@ -79,7 +79,7 @@
       "collapsed" : false
     },
     "cell_type" : "code",
-    "source" : "val x = readTable(\"/Users/lebbah/bin/smile-1.1.0/data/clustering/gaussian/six.txt\").unzip\nval clusters = hclust(pdist(x), \"complete\")\nval y_hier = clusters.partition(6)\nplot(x, y_hier, '.', Palette.COLORS)",
+    "source" : "val x = readTable(\"/data/clustering/gaussian/six.txt\").unzip\nval clusters = hclust(pdist(x), \"complete\")\nval y_hier = clusters.partition(6)\nplot(x, y_hier, '.', Palette.COLORS)",
     "outputs" : [ {
       "name" : "stdout",
       "output_type" : "stream",
