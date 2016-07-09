@@ -11,5 +11,23 @@ DOAN Nhat Quang (USTH, Vietnam).
 The purpose of this program is to calculate the external and internal Indices 
 using SPARK which is used to measure how good is the clustering algorithm (using labels with external indices). 
  This work is based on the Cluster Crit package in R
+ 
+internal indices:
+* Czekanowski Dice 
+* Rand Index
+* Rogers Tanimoto 
+* Folkes Mallows 
+* Jaccard 
+* Kulczynski
+* McNemar
+* Russel Rao
+* Sokal Sneath 1
+* Sokal Sneath 2
+* Recall
+* Precision
+
+External indices
+*Davies Bouldin Index 
+*Silhouette Index.
 
 The clustering algorithms are based on SMILE [Smile (Statistical Machine Intelligence and Learning Engine)](https://github.com/haifengl/smile). Smile is a fast and comprehensive machine learning system. 
