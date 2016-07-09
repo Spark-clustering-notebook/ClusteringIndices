@@ -26,8 +26,8 @@ internal indices:
 * Recall
 * Precision
 
-External indices
-*Davies Bouldin Index 
-*Silhouette Index.
+External indices:
+* Davies Bouldin Index 
+* Silhouette Index.
 
 The clustering algorithms are based on SMILE [Smile (Statistical Machine Intelligence and Learning Engine)](https://github.com/haifengl/smile). Smile is a fast and comprehensive machine learning system. 
