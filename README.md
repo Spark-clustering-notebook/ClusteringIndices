@@ -1,8 +1,8 @@
 # Clustering Indices  with Spark-notebook
 
-This work was done during an internship (2016) at Computer Science Laboratory (Laboratoire d'Informatique de Paris Nord, LIPN) at the University of Paris 13, with 
+This work was done during an internship (L3, 2016) at Computer Science Laboratory (Laboratoire d'Informatique de Paris Nord, LIPN) at the University of Paris 13, with 
 
-CAO Anh Quan (USTH, Vitenam)
+CAO Anh Quan (University of Science and Technology of Hanoi)
 
 supervized by  
 
